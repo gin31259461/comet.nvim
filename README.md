@@ -41,14 +41,14 @@ Install `comet.nvim` using your preferred package manager.
 
 ```lua
 {
-  "gin31259461/comet.nvim",
+  "Orbit-Lua/comet.nvim",
 }
 ```
 
 **[packer.nvim](https://github.com/wbthomason/packer.nvim):**
 
 ```lua
-use { 'gin31259461/comet.nvim' }
+use { 'Orbit-Lua/comet.nvim' }
 ```
 
 ---

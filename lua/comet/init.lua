@@ -18,6 +18,13 @@
 local M = {}
 local api = vim.api
 
+-- ── persistent state ──────────────────────────────────────────────────────────
+
+-- Cache output buffers by page title to persist them across opens and depths
+local output_buf_cache = {}
+-- Tracks abort functions by page_key: { [page_key] = function() end }
+local running_tasks = {}
+
 -- ── active UI state ───────────────────────────────────────────────────────────
 
 local S = {}
@@ -65,6 +72,78 @@ local function highlight_output(start_line, end_line)
       end
     end
   end
+end
+
+-- ── focus helpers ─────────────────────────────────────────────────────────────
+
+local function focus_output()
+  if not (S.output_win and api.nvim_win_is_valid(S.output_win)) then
+    return
+  end
+  vim.cmd("stopinsert")
+  api.nvim_set_current_win(S.output_win)
+  vim.wo[S.output_win].cursorline = true
+  pcall(api.nvim_win_set_config, S.output_win, {
+    title = " Output (focused) ",
+    title_pos = "center",
+  })
+end
+
+local function unfocus_output()
+  if S.output_win and api.nvim_win_is_valid(S.output_win) then
+    vim.wo[S.output_win].cursorline = false
+    pcall(api.nvim_win_set_config, S.output_win, {
+      title = " Output ",
+      title_pos = "center",
+    })
+  end
+  if S.input_win and api.nvim_win_is_valid(S.input_win) then
+    api.nvim_set_current_win(S.input_win)
+    if S.insert_mode then
+      vim.cmd("startinsert")
+    end
+  end
+end
+
+-- ── window & keymap helpers ───────────────────────────────────────────────────
+
+local function update_output_title()
+  if not (S.output_win and api.nvim_win_is_valid(S.output_win)) then
+    return
+  end
+  local is_focused = api.nvim_get_current_win() == S.output_win
+  local title = is_focused and " Output (focused) " or " Output "
+
+  -- Show UI indicator if there is an active job for the current page
+  if running_tasks[S.current_page_key] then
+    title = title .. "[C-c: Stop] "
+  end
+
+  pcall(api.nvim_win_set_config, S.output_win, {
+    title = title,
+    title_pos = "center",
+  })
+end
+
+local function apply_output_keymaps(buf)
+  local function km(mode, lhs, fn)
+    vim.keymap.set(mode, lhs, fn, { buffer = buf, nowait = true })
+  end
+
+  -- Output keybinds (replacing the ones previously in setup_keymaps)
+  km("n", "<Esc>", unfocus_output)
+  km("n", "q", unfocus_output)
+  km("n", "<C-h>", unfocus_output)
+  km("n", "<C-l>", focus_output)
+  km({ "n", "i" }, "<C-i>", "<Nop>")
+
+  -- Stop job from output panel
+  km("n", "<C-c>", function()
+    local abort = running_tasks[S.current_page_key]
+    if abort then
+      abort()
+    end
+  end)
 end
 
 -- ── output helpers ────────────────────────────────────────────────────────────
@@ -117,6 +196,30 @@ local function out_clear()
   end
 end
 
+---Switch the output buffer to the one associated with the given page key
+---@param page_key string
+local function switch_output_buf(page_key)
+  local buf = output_buf_cache[page_key]
+
+  if not buf or not api.nvim_buf_is_valid(buf) then
+    buf = api.nvim_create_buf(false, true)
+    vim.bo[buf].modifiable = false
+    vim.bo[buf].buftype = "nofile"
+    output_buf_cache[page_key] = buf
+
+    -- Apply keymaps directly when a new output buffer is created
+    apply_output_keymaps(buf)
+  end
+
+  S.output_buf = buf
+  S.current_page_key = page_key
+
+  if S.output_win and api.nvim_win_is_valid(S.output_win) then
+    api.nvim_win_set_buf(S.output_win, S.output_buf)
+    vim.wo[S.output_win].wrap = true
+    update_output_title()
+  end
+end
 -- ── close ─────────────────────────────────────────────────────────────────────
 
 local function do_close()
@@ -126,7 +229,9 @@ local function do_close()
   for _, win in ipairs({ S.input_win, S.list_win, S.output_win }) do
     pcall(api.nvim_win_close, win, true)
   end
-  for _, buf in ipairs({ S.input_buf, S.list_buf, S.output_buf }) do
+
+  -- NOTE: ONLY delete input and list buffers; spare the output buffer
+  for _, buf in ipairs({ S.input_buf, S.list_buf }) do
     pcall(api.nvim_buf_delete, buf, { force = true })
   end
   S = {}
@@ -314,50 +419,31 @@ local function put_input_query(query)
   S.last_query = query
 end
 
--- ── focus helpers ─────────────────────────────────────────────────────────────
-
-local function focus_output()
-  if not (S.output_win and api.nvim_win_is_valid(S.output_win)) then
-    return
-  end
-  vim.cmd("stopinsert")
-  api.nvim_set_current_win(S.output_win)
-  vim.wo[S.output_win].cursorline = true
-  pcall(api.nvim_win_set_config, S.output_win, {
-    title = " Output (focused) ",
-    title_pos = "center",
-  })
-end
-
-local function unfocus_output()
-  if S.output_win and api.nvim_win_is_valid(S.output_win) then
-    vim.wo[S.output_win].cursorline = false
-    pcall(api.nvim_win_set_config, S.output_win, {
-      title = " Output ",
-      title_pos = "center",
-    })
-  end
-  if S.input_win and api.nvim_win_is_valid(S.input_win) then
-    api.nvim_set_current_win(S.input_win)
-    if S.insert_mode then
-      vim.cmd("startinsert")
-    end
-  end
-end
-
 -- ── ctx factory ───────────────────────────────────────────────────────────────
 
-local function make_ctx()
+---@param trigger_name string
+local function make_ctx(trigger_name)
   return {
     write = out_write,
     clear = out_clear,
+
     append = function(line)
-      out_write({ line })
+      out_write(line)
     end,
 
-    ---Push a sub-selection list onto the left panel.
-    ---@param items string[]|table[]
-    ---@param opts {title?: string, multi_select?: boolean, on_select: fun(item: any, ctx: table), on_cancel?: fun()}
+    ---Register a function to be called when user presses <C-c>. Pass nil to clear.
+    set_abort = function(abort_fn)
+      local pk = S.current_page_key
+      running_tasks[pk] = abort_fn
+      vim.schedule(update_output_title)
+    end,
+
+    done = function()
+      local pk = S.current_page_key
+      running_tasks[pk] = nil
+      vim.schedule(update_output_title)
+    end,
+
     select = function(items, opts)
       local saved = take_input_query()
       local all = vim.deepcopy(items)
@@ -366,19 +452,36 @@ local function make_ctx()
           it._idx = i
         end
       end
+
+      local sub_title = opts.title or "Select"
+
+      -- Key Logic: If entering level 2 from root, use the item's name (e.g., "build").
+      -- If entering level 3+, reuse the base level 2 page_key so they all share the same buffer.
+      local target_page_key
+      if #S.sub_stack == 0 then
+        target_page_key = trigger_name
+      else
+        target_page_key = S.sub_stack[1].page_key
+      end
+
       table.insert(S.sub_stack, {
         all_items = all,
         items = vim.deepcopy(all),
         selected = 1,
         on_select = opts.on_select,
         on_cancel = opts.on_cancel,
-        title = opts.title or "Select",
+        title = sub_title,
+        page_key = target_page_key, -- Store the shared key in the stack
         saved_query = saved,
         multi_select = opts.multi_select or false,
         marked = {},
       })
+
+      -- Switch to the shared branch buffer
+      switch_output_buf(target_page_key)
+
       pcall(api.nvim_win_set_config, S.input_win, {
-        title = " " .. (opts.title or "Select") .. " ",
+        title = " " .. sub_title .. " ",
         title_pos = "center",
       })
       render_list()
@@ -395,6 +498,14 @@ end
 -- ── execute selected ──────────────────────────────────────────────────────────
 
 local function run_selected()
+  -- Prevent execution if a job is currently running and the option is enabled
+  if S.block_while_running and running_tasks[S.current_page_key] then
+    vim.api.nvim_echo({
+      { " Task is still running. Press <C-c> to stop it first.", "DiagnosticWarn" },
+    }, false, {})
+    return
+  end
+
   local was_insert = api.nvim_get_mode().mode == "i"
   local items = current_items()
   local sel = current_selected()
@@ -406,6 +517,9 @@ local function run_selected()
     return
   end
 
+  -- Identify the trigger item's name to scope child buffers correctly
+  local trigger_name = type(item) == "table" and (item.name or "Item") or tostring(item)
+
   local sub = current_sub()
   if sub then
     if sub.multi_select then
@@ -416,43 +530,57 @@ local function run_selected()
             table.insert(selected_items, it)
           end
         end
+        -- Adjust trigger name if multiple items are executed
+        if #selected_items > 1 then
+          trigger_name = "Multi(" .. #selected_items .. ")"
+        else
+          local first = selected_items[1]
+          trigger_name = type(first) == "table" and (first.name or "Item") or tostring(first)
+        end
       else
         selected_items = { item }
       end
 
       local on_sel = sub.on_select
       local popped = table.remove(S.sub_stack)
+
+      local parent_title = S.list_title
+      local parent_key = S.list_title
+
       if #S.sub_stack > 0 then
         local parent = S.sub_stack[#S.sub_stack]
-        pcall(api.nvim_win_set_config, S.input_win, {
-          title = " " .. parent.title .. " ",
-          title_pos = "center",
-        })
-      else
-        pcall(api.nvim_win_set_config, S.input_win, {
-          title = " " .. S.list_title .. " ",
-          title_pos = "center",
-        })
+        parent_title = parent.title
+        -- Restore to the shared branch buffer if still in a sub-menu
+        parent_key = S.sub_stack[1].page_key
       end
+
+      pcall(api.nvim_win_set_config, S.input_win, {
+        title = " " .. parent_title .. " ",
+        title_pos = "center",
+      })
+
+      switch_output_buf(parent_key)
+
       put_input_query(popped.saved_query or "")
       if #S.sub_stack > 0 then
         filter_sub(S.last_query)
       else
         filter_commands(S.last_query or "")
       end
+
       render_list()
       if on_sel and #selected_items > 0 then
-        on_sel(selected_items, make_ctx())
+        on_sel(selected_items, make_ctx(trigger_name))
       end
     else
       if sub.on_select then
-        sub.on_select(item, make_ctx())
+        sub.on_select(item, make_ctx(trigger_name))
       end
       render_list()
     end
   else
     if item.action then
-      item.action(make_ctx())
+      item.action(make_ctx(trigger_name))
     end
   end
 
@@ -492,18 +620,22 @@ local function handle_esc()
       popped.on_cancel()
     end
 
+    local parent_title = S.list_title
+    local parent_key = S.list_title
+
     if #S.sub_stack > 0 then
       local parent = S.sub_stack[#S.sub_stack]
-      pcall(api.nvim_win_set_config, S.input_win, {
-        title = " " .. parent.title .. " ",
-        title_pos = "center",
-      })
-    else
-      pcall(api.nvim_win_set_config, S.input_win, {
-        title = " " .. S.list_title .. " ",
-        title_pos = "center",
-      })
+      parent_title = parent.title
+      -- Restore to the shared branch buffer if still in a sub-menu
+      parent_key = S.sub_stack[1].page_key
     end
+
+    pcall(api.nvim_win_set_config, S.input_win, {
+      title = " " .. parent_title .. " ",
+      title_pos = "center",
+    })
+
+    switch_output_buf(parent_key)
 
     put_input_query(popped.saved_query or "")
     if #S.sub_stack > 0 then
@@ -563,15 +695,30 @@ local function setup_keymaps()
     vim.keymap.set(mode, lhs, fn, { buffer = buf, nowait = true })
   end
 
-  -- Close: Esc/q on input and list panels
-  for _, buf in ipairs({ S.input_buf, S.list_buf }) do
-    km({ "n", "i" }, "<Esc>", handle_esc, buf)
-    km("n", "q", handle_esc, buf)
+  -- Stop job from input/list panels
+  local function stop_job()
+    local abort = running_tasks[S.current_page_key]
+    if abort then
+      abort()
+    end
   end
 
-  -- Output panel: Esc/q returns focus to input (don't close the UI)
-  km("n", "<Esc>", unfocus_output, S.output_buf)
-  km("n", "q", unfocus_output, S.output_buf)
+  -- Shared keymaps for input and list buffers
+  for _, buf in ipairs({ S.input_buf, S.list_buf }) do
+    -- Close UI
+    km({ "n", "i" }, "<Esc>", handle_esc, buf)
+    km("n", "q", handle_esc, buf)
+
+    -- Abort running task
+    km({ "n", "i" }, "<C-c>", stop_job, buf)
+
+    -- Focus / unfocus output panel
+    km({ "n", "i" }, "<C-l>", focus_output, buf)
+    km({ "n", "i" }, "<C-h>", unfocus_output, buf)
+
+    -- Nop (prevent unintended jumps)
+    km({ "n", "i" }, "<C-i>", "<Nop>", buf)
+  end
 
   -- Navigate list from input (insert mode)
   km("i", "<C-j>", function()
@@ -615,36 +762,24 @@ local function setup_keymaps()
   -- Tab: toggle multi-select mark
   km({ "n", "i" }, "<Tab>", toggle_mark, S.input_buf)
   km("n", "<Tab>", toggle_mark, S.list_buf)
-
-  -- C-l / C-h: focus and unfocus output panel
-  for _, buf in ipairs({ S.input_buf, S.list_buf }) do
-    km({ "n", "i" }, "<C-l>", focus_output, buf)
-  end
-  km("n", "<C-l>", focus_output, S.output_buf)
-
-  for _, buf in ipairs({ S.input_buf, S.list_buf }) do
-    km({ "n", "i" }, "<C-h>", unfocus_output, buf)
-  end
-  km("n", "<C-h>", unfocus_output, S.output_buf)
-
-  -- Nop
-  for _, buf in ipairs({ S.input_buf, S.output_buf, S.list_buf }) do
-    km({ "n", "i" }, "<C-i>", "<Nop>", buf)
-  end
 end
 
 -- ── autocmds ──────────────────────────────────────────────────────────────────
 
 local function setup_autocmds()
   local aug = api.nvim_create_augroup("CometUI", { clear = true })
-  local promptw = api.nvim_strwidth(S.prompt)
 
-  api.nvim_create_autocmd("TextChangedI", {
+  -- local promptw = api.nvim_strwidth(S.prompt)
+  -- Use byte length instead of strwidth because string.sub operates on bytes
+  local prompt_bytes = #S.prompt
+
+  -- Listen to both Insert and Normal mode text changes
+  api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
     group = aug,
     buffer = S.input_buf,
     callback = function()
       local line = api.nvim_get_current_line()
-      local query = line:sub(promptw + 1)
+      local query = line:sub(prompt_bytes + 1)
       S.last_query = query
       local sub = current_sub()
       if sub then
@@ -655,6 +790,29 @@ local function setup_autocmds()
         filter_commands(query)
       end
       render_list()
+    end,
+  })
+
+  -- Prevent cursor from moving into the prompt area
+  api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+    group = aug,
+    buffer = S.input_buf,
+    callback = function()
+      local cursor = api.nvim_win_get_cursor(0)
+      local mode = api.nvim_get_mode().mode
+      local line_len = #api.nvim_get_current_line()
+
+      local min_col = prompt_bytes
+      -- In normal mode, Neovim clamps cursor to line_len - 1.
+      -- We must adjust min_col to prevent an infinite CursorMoved loop.
+      if mode:sub(1, 1) ~= "i" then
+        min_col = math.min(prompt_bytes, math.max(0, line_len - 1))
+      end
+
+      -- cursor[2] is the 0-indexed byte column
+      if cursor[2] < min_col then
+        pcall(api.nvim_win_set_cursor, 0, { cursor[1], min_col })
+      end
     end,
   })
 
@@ -681,12 +839,19 @@ end
 ---@class CometCtx
 ---@field write fun(lines: string[]|string)
 ---@field clear fun()
+---@field done fun()
 ---@field append fun(line: string)
+---@field set_abort fun(abort_fn: function|nil) Register or clear a stop handler for <C-c>
 ---@field select fun(items: any[], opts: {title?: string, multi_select?: boolean, on_select: fun(item_or_items: any, ctx: CometCtx), on_cancel?: fun()})
+
+---@class CometOpts
+---@field title? string
+---@field insert_mode? boolean
+---@field block_while_running? boolean If true, prevents executing new commands in the current page until the running job finishes
 
 ---Open the two-panel picker UI.
 ---@param commands CometCommand[]
----@param opts? {title?: string, insert_mode?: boolean}
+---@param opts? CometOpts
 M.open = function(commands, opts)
   if is_open() then
     do_close()
@@ -701,7 +866,7 @@ M.open = function(commands, opts)
   local col_start = math.floor((vim.o.columns - total_w) / 2)
   local row_start = math.floor((vim.o.lines - total_h) / 2)
   local list_h = total_h - 3
-  local prompt = "   "
+  local prompt = "  "
   local title = opts.title or "Commands"
 
   S = {
@@ -714,6 +879,7 @@ M.open = function(commands, opts)
     list_h = list_h,
     list_title = title,
     insert_mode = opts.insert_mode == true,
+    block_while_running = opts.block_while_running ~= true,
     ns = api.nvim_create_namespace("CometUI"),
     out_ns = api.nvim_create_namespace("CometUIOutput"),
   }
@@ -721,7 +887,10 @@ M.open = function(commands, opts)
   -- ── buffers ─────────────────────────────────────────────────────────────────
   S.input_buf = api.nvim_create_buf(false, true)
   S.list_buf = api.nvim_create_buf(false, true)
-  S.output_buf = api.nvim_create_buf(false, true)
+  -- S.output_buf = api.nvim_create_buf(false, true)
+
+  -- Initialize root page buffer using our caching system
+  switch_output_buf(title)
 
   -- ── windows ─────────────────────────────────────────────────────────────────
   S.input_win = api.nvim_open_win(S.input_buf, true, {

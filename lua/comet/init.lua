@@ -52,6 +52,7 @@ local OUT_HL_PATTERNS = {
   { pat = "Build FAILED", line_hl = "DiagnosticError" },
   { pat = "[Ww]arning%s", line_hl = "DiagnosticWarn" },
   { pat = "[Aa]bort%s", line_hl = "DiagnosticWarn" },
+  { pat = "%[Process Terminated by User%]", line_hl = "DiagnosticWarn" },
   { pat = "[Ee]rror%s", line_hl = "DiagnosticError" },
   { pat = "Restored%s", line_hl = "DiagnosticOk" },
   { pat = "Passed!", line_hl = "DiagnosticOk" },

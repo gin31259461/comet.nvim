@@ -22,11 +22,17 @@ local api = vim.api
 
 -- Cache output buffers by page title to persist them across opens and depths
 local output_buf_cache = {}
--- Tracks abort functions by page_key: { [page_key] = function() end }
-local running_tasks = {}
 
----@type table<string, "running"|"done"|"abort"|nil>
-local task_status = {} -- Track current status of each page_key
+---@class RunningTaskInfo
+---@field abort_fn fun(job_id: integer, ctx: CometCtx)|nil Function to call to signal the task to stop
+---@field status "running"|"done"|"abort"|nil Current status of the task for UI display
+---@field id integer|nil Job ID if applicable
+---@field ctx CometCtx|nil Context passed to the task, useful for updating output on abort
+
+--- Track running tasks by page key to manage their lifecycle and UI state
+--- [page_key] -> RunningTaskInfo
+---@type table<string, RunningTaskInfo>
+local running_tasks = {}
 
 -- ── active UI state ───────────────────────────────────────────────────────────
 
@@ -45,6 +51,7 @@ local OUT_HL_PATTERNS = {
   { pat = "Build succeeded", line_hl = "DiagnosticOk" },
   { pat = "Build FAILED", line_hl = "DiagnosticError" },
   { pat = "[Ww]arning%s", line_hl = "DiagnosticWarn" },
+  { pat = "[Aa]bort%s", line_hl = "DiagnosticWarn" },
   { pat = "[Ee]rror%s", line_hl = "DiagnosticError" },
   { pat = "Restored%s", line_hl = "DiagnosticOk" },
   { pat = "Passed!", line_hl = "DiagnosticOk" },
@@ -53,22 +60,24 @@ local OUT_HL_PATTERNS = {
 
 -- ── output highlight helper ───────────────────────────────────────────────────
 
+---@param target_buf integer The specific buffer to highlight
 ---@param start_line integer 0-based first line
 ---@param end_line integer 0-based one-past-last line
-local function highlight_output(start_line, end_line)
-  if not (S.output_buf and api.nvim_buf_is_valid(S.output_buf)) then
+local function highlight_output(target_buf, start_line, end_line)
+  -- Use target_buf instead of S.output_buf
+  if not (target_buf and api.nvim_buf_is_valid(target_buf)) then
     return
   end
   if not S.out_ns then
     return
   end
 
-  local lines = api.nvim_buf_get_lines(S.output_buf, start_line, end_line, false)
+  local lines = api.nvim_buf_get_lines(target_buf, start_line, end_line, false)
   for i, line in ipairs(lines) do
     local row = start_line + i - 1
     for _, rule in ipairs(OUT_HL_PATTERNS) do
       if line:find(rule.pat) then
-        api.nvim_buf_set_extmark(S.output_buf, S.out_ns, row, 0, {
+        api.nvim_buf_set_extmark(target_buf, S.out_ns, row, 0, {
           line_hl_group = rule.line_hl,
         })
         break
@@ -84,30 +93,46 @@ local function update_output_title()
     return
   end
 
-  local title = ""
+  local title = " Output "
 
-  if #S.sub_stack == 0 then
-    title = " Output "
-  else
-    title = " Output " .. S.current_page_key .. " "
-    local status = task_status[S.current_page_key]
-    local is_focused = api.nvim_get_current_win() == S.output_win
-
-    if status == "running" then
-      title = title .. "[C-c: Stop]"
-    elseif status == "done" then
-      title = title .. "[Done]"
-    elseif status == "abort" then
-      title = title .. "[Abort]"
-    end
-
-    title = title .. (is_focused and " (focused) " or " ")
+  -- Add page key indicator only if we are inside a sub-menu (level > 0)
+  if #S.sub_stack > 0 then
+    title = title .. S.current_page_key .. " "
   end
+
+  -- Evaluate task status and window focus for ALL pages (including root)
+  local status = running_tasks[S.current_page_key] and running_tasks[S.current_page_key].status or nil
+  local is_focused = api.nvim_get_current_win() == S.output_win
+
+  if status == "running" then
+    title = title .. "[C-c: Stop]"
+  elseif status == "done" then
+    title = title .. "[Done]"
+  elseif status == "abort" then
+    title = title .. "[Abort]"
+  end
+
+  -- Apply focus indicator uniformly
+  title = title .. (is_focused and "(focused) " or " ")
 
   pcall(api.nvim_win_set_config, S.output_win, {
     title = title,
     title_pos = "center",
   })
+end
+
+local function stop_job()
+  local abort = running_tasks[S.current_page_key].abort_fn
+  local job_id = running_tasks[S.current_page_key].id
+  local ctx = running_tasks[S.current_page_key].ctx
+  local status = running_tasks[S.current_page_key].status
+
+  if abort and job_id and ctx and (status == "running") then
+    abort(job_id, ctx)
+
+    running_tasks[S.current_page_key].status = nil
+    update_output_title()
+  end
 end
 
 -- ── focus helpers ─────────────────────────────────────────────────────────────
@@ -150,18 +175,15 @@ local function apply_output_keymaps(buf)
   km({ "n", "i" }, "<C-i>", "<Nop>")
 
   -- Stop job from output panel
-  km("n", "<C-c>", function()
-    local abort = running_tasks[S.current_page_key]
-    if abort then
-      abort()
-    end
-  end)
+  km("n", "<C-c>", stop_job)
 end
 
 -- ── output helpers ────────────────────────────────────────────────────────────
 
-local function out_write(lines)
-  if not (S.output_buf and api.nvim_buf_is_valid(S.output_buf)) then
+---@param target_buf integer The buffer where the output should be written
+---@param lines string|string[]
+local function out_write(target_buf, lines)
+  if not (target_buf and api.nvim_buf_is_valid(target_buf)) then
     return
   end
   if type(lines) == "string" then
@@ -179,32 +201,36 @@ local function out_write(lines)
     return
   end
 
-  vim.bo[S.output_buf].modifiable = true
-  local n = api.nvim_buf_line_count(S.output_buf)
+  vim.bo[target_buf].modifiable = true
+  local n = api.nvim_buf_line_count(target_buf)
   local start = n
-  if n == 1 and api.nvim_buf_get_lines(S.output_buf, 0, 1, false)[1] == "" then
+  if n == 1 and api.nvim_buf_get_lines(target_buf, 0, 1, false)[1] == "" then
     start = 0
   end
-  api.nvim_buf_set_lines(S.output_buf, start, -1, false, to_write)
-  vim.bo[S.output_buf].modifiable = false
+  api.nvim_buf_set_lines(target_buf, start, -1, false, to_write)
+  vim.bo[target_buf].modifiable = false
 
-  highlight_output(start, start + #to_write)
+  highlight_output(target_buf, start, start + #to_write)
 
+  -- Scroll only if the output window is currently displaying this specific buffer
   if S.output_win and api.nvim_win_is_valid(S.output_win) then
-    local new_n = api.nvim_buf_line_count(S.output_buf)
-    pcall(api.nvim_win_set_cursor, S.output_win, { new_n, 0 })
+    if api.nvim_win_get_buf(S.output_win) == target_buf then
+      local new_n = api.nvim_buf_line_count(target_buf)
+      pcall(api.nvim_win_set_cursor, S.output_win, { new_n, 0 })
+    end
   end
 end
 
-local function out_clear()
-  if not (S.output_buf and api.nvim_buf_is_valid(S.output_buf)) then
+---@param target_buf integer The buffer to clear
+local function out_clear(target_buf)
+  if not (target_buf and api.nvim_buf_is_valid(target_buf)) then
     return
   end
-  vim.bo[S.output_buf].modifiable = true
-  api.nvim_buf_set_lines(S.output_buf, 0, -1, false, {})
-  vim.bo[S.output_buf].modifiable = false
+  vim.bo[target_buf].modifiable = true
+  api.nvim_buf_set_lines(target_buf, 0, -1, false, {})
+  vim.bo[target_buf].modifiable = false
   if S.out_ns then
-    api.nvim_buf_clear_namespace(S.output_buf, S.out_ns, 0, -1)
+    api.nvim_buf_clear_namespace(target_buf, S.out_ns, 0, -1)
   end
 end
 
@@ -436,25 +462,50 @@ end
 ---@param trigger_name string
 ---@return CometCtx
 local function make_ctx(trigger_name)
-  return {
-    write = out_write,
-    clear = out_clear,
+  -- Capture the currently active buffer and page key at context creation time.
+  -- This locks the output destination for this specific task.
+  local target_buf = S.output_buf
+  local target_page_key = S.current_page_key
+
+  ---@type CometCtx
+  local ctx = {
+    write = function(lines)
+      out_write(target_buf, lines)
+    end,
+
+    clear = function()
+      out_clear(target_buf)
+    end,
 
     append = function(line)
-      out_write(line)
+      out_write(target_buf, line)
     end,
 
     ---Register a function to be called when user presses send stop signal. Pass nil to clear.
-    set_abort = function(abort_fn)
-      running_tasks[S.current_page_key] = abort_fn
-      task_status[S.current_page_key] = abort_fn and "running" or nil
+    start_async_task = function(job_id, abort_fn)
+      -- HACK:
+      -- DYNAMIC EVALUATION: Fetch the current page key at execution time.
+      -- If the action logic changed the page (e.g., via ctx.select) before
+      -- starting the job, this ensures the task is tracked under the newly
+      -- activated page, displaying the "running" state correctly.
+      local pk = S.current_page_key
+
+      running_tasks[pk].abort_fn = abort_fn or S.default_abort_fn
+      running_tasks[pk].status = "running"
+      running_tasks[pk].id = job_id
       vim.schedule(update_output_title)
     end,
 
     done = function()
-      running_tasks[S.current_page_key] = nil
-      task_status[S.current_page_key] = "done"
-      vim.schedule(update_output_title)
+      -- HACK:
+      -- CLOSURE BINDING: Always use the originally captured page key.
+      -- Task completion is asynchronous. Even if the user has navigated away
+      -- (e.g., back to the root page), this guarantees the completion status
+      -- ("done") is applied to the exact page that spawned the task.
+      if running_tasks[target_page_key] then
+        running_tasks[target_page_key].status = "done"
+        vim.schedule(update_output_title)
+      end
     end,
 
     select = function(items, opts)
@@ -470,7 +521,6 @@ local function make_ctx(trigger_name)
 
       -- Key Logic: If entering level 2 from root, use the item's name (e.g., "build").
       -- If entering level 3+, reuse the base level 2 page_key so they all share the same buffer.
-      local target_page_key
       if #S.sub_stack == 0 then
         target_page_key = trigger_name
       else
@@ -506,13 +556,19 @@ local function make_ctx(trigger_name)
       end
     end,
   }
+  running_tasks[S.current_page_key] = { abort_fn = S.default_abort_fn, ctx = ctx, status = nil, id = nil } -- Initialize task tracking for this trigger name
+  return ctx
 end
 
 -- ── execute selected ──────────────────────────────────────────────────────────
 
 local function run_selected()
   -- Prevent execution if a job is currently running and the option is enabled
-  if S.block_while_running and running_tasks[S.current_page_key] then
+  if
+    S.block_while_running
+    and running_tasks[S.current_page_key]
+    and running_tasks[S.current_page_key].status == "running"
+  then
     vim.api.nvim_echo({
       { " Task is still running. Press <C-c> to stop it first.", "DiagnosticWarn" },
     }, false, {})
@@ -702,23 +758,11 @@ local function toggle_mark()
 end
 
 -- ── keymaps ───────────────────────────────────────────────────────────────────
+--
 
 local function setup_keymaps()
   local function km(mode, lhs, fn, buf)
     vim.keymap.set(mode, lhs, fn, { buffer = buf, nowait = true })
-  end
-
-  -- Stop job from input/list panels
-  local function stop_job()
-    local abort = running_tasks[S.current_page_key]
-
-    if abort then
-      abort()
-
-      running_tasks[S.current_page_key] = nil
-      task_status[S.current_page_key] = nil
-      update_output_title()
-    end
   end
 
   -- Shared keymaps for input and list buffers
@@ -859,13 +903,21 @@ end
 ---@field clear fun()
 ---@field done fun()
 ---@field append fun(line: string)
----@field set_abort fun(abort_fn: function|nil) Register or clear a stop handler for stop signal
+---@field start_async_task fun(job_id: integer, abort_fn: function|nil) Register or clear a stop handler for stop signal
 ---@field select fun(items: any[], opts: {title?: string, multi_select?: boolean, on_select: fun(item_or_items: any, ctx: CometCtx), on_cancel?: fun()})
 
 ---@class CometOpts
 ---@field title? string
 ---@field insert_mode? boolean
 ---@field block_while_running? boolean If true, prevents executing new commands in the current page until the running job finishes
+
+---@param ctx CometCtx
+---@param job_id integer
+local function default_abort_fn(job_id, ctx)
+  vim.fn.jobstop(job_id)
+  ctx.append("\n[Process Terminated by User]")
+  running_tasks[S.current_page_key].status = nil
+end
 
 ---Open the two-panel picker UI.
 ---@param commands CometCommand[]
@@ -900,6 +952,7 @@ M.open = function(commands, opts)
     block_while_running = opts.block_while_running ~= true,
     ns = api.nvim_create_namespace("CometUI"),
     out_ns = api.nvim_create_namespace("CometUIOutput"),
+    default_abort_fn = default_abort_fn,
   }
 
   -- ── buffers ─────────────────────────────────────────────────────────────────

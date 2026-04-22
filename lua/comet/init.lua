@@ -25,7 +25,7 @@ local output_buf_cache = {}
 
 ---@class RunningTaskInfo
 ---@field abort_fn fun(job_id: integer, ctx: CometCtx)|nil Function to call to signal the task to stop
----@field status "running"|"done"|"abort"|nil Current status of the task for UI display
+---@field status "running"|"done"|"abort"|"error"|nil Current status of the task for UI display
 ---@field id integer|nil Job ID if applicable
 ---@field ctx CometCtx|nil Context passed to the task, useful for updating output on abort
 
@@ -33,6 +33,10 @@ local output_buf_cache = {}
 --- [page_key] -> RunningTaskInfo
 ---@type table<string, RunningTaskInfo>
 local running_tasks = {}
+
+--- Store the UI state (sub_stack, query, selection) across closing and reopening
+---@type table|nil
+local persisted_state = nil
 
 -- ── active UI state ───────────────────────────────────────────────────────────
 
@@ -87,6 +91,19 @@ local function highlight_output(target_buf, start_line, end_line)
   end
 end
 
+--- Re-apply highlights for the entire buffer (used when reopening/switching)
+---@param target_buf integer
+local function rehighlight_output(target_buf)
+  if not (target_buf and api.nvim_buf_is_valid(target_buf)) then
+    return
+  end
+  if S.out_ns then
+    api.nvim_buf_clear_namespace(target_buf, S.out_ns, 0, -1)
+  end
+  local line_count = api.nvim_buf_line_count(target_buf)
+  highlight_output(target_buf, 0, line_count)
+end
+
 -- ── window helper ───────────────────────────────────────────────────
 
 local function update_output_title()
@@ -111,6 +128,8 @@ local function update_output_title()
     title = title .. "[Done]"
   elseif status == "abort" then
     title = title .. "[Abort]"
+  elseif status == "error" then
+    title = title .. "[Error]"
   end
 
   -- Apply focus indicator uniformly
@@ -253,6 +272,8 @@ local function switch_output_buf(page_key)
   S.output_buf = buf
   S.current_page_key = page_key
 
+  rehighlight_output(S.output_buf)
+
   if S.output_win and api.nvim_win_is_valid(S.output_win) then
     api.nvim_win_set_buf(S.output_win, S.output_buf)
     vim.wo[S.output_win].wrap = true
@@ -265,6 +286,19 @@ local function do_close()
   if not is_open() then
     return
   end
+
+  if S.remember_page then
+    persisted_state = {
+      sub_stack = S.sub_stack,
+      selected = S.selected,
+      filtered = S.filtered,
+      last_query = S.last_query,
+      current_page_key = S.current_page_key,
+    }
+  else
+    persisted_state = nil
+  end
+
   for _, win in ipairs({ S.input_win, S.list_win, S.output_win }) do
     pcall(api.nvim_win_close, win, true)
   end
@@ -505,6 +539,13 @@ local function make_ctx(trigger_name)
       -- ("done") is applied to the exact page that spawned the task.
       if running_tasks[target_page_key] then
         running_tasks[target_page_key].status = "done"
+        vim.schedule(update_output_title)
+      end
+    end,
+
+    error = function()
+      if running_tasks[target_page_key] then
+        running_tasks[target_page_key].status = "error"
         vim.schedule(update_output_title)
       end
     end,
@@ -911,6 +952,7 @@ end
 ---@field title? string
 ---@field insert_mode? boolean
 ---@field block_while_running? boolean If true, prevents executing new commands in the current page until the running job finishes
+---@field remember_page? boolean If true, remembers the last active sub-page for each root command and restores it when re-entering that command
 
 ---@param ctx CometCtx
 ---@param job_id integer
@@ -927,6 +969,7 @@ M.open = function(commands, opts)
   if is_open() then
     do_close()
   end
+
   opts = opts or {}
 
   -- ── layout math ─────────────────────────────────────────────────────────────
@@ -949,12 +992,22 @@ M.open = function(commands, opts)
     prompt = prompt,
     list_h = list_h,
     list_title = title,
-    insert_mode = opts.insert_mode == true,
-    block_while_running = opts.block_while_running ~= true,
+    insert_mode = not not opts.insert_mode, -- default is false (normal mode)
+    block_while_running = opts.block_while_running ~= false, -- default is true
     ns = api.nvim_create_namespace("CometUI"),
     out_ns = api.nvim_create_namespace("CometUIOutput"),
     default_abort_fn = default_abort_fn,
+    remember_page = opts.remember_page ~= false,
+    current_page_key = title, -- Start with root page key as the main title
   }
+
+  if S.remember_page and persisted_state then
+    S.sub_stack = persisted_state.sub_stack
+    S.selected = persisted_state.selected
+    S.filtered = persisted_state.filtered
+    S.last_query = persisted_state.last_query
+    S.current_page_key = persisted_state.current_page_key
+  end
 
   -- ── buffers ─────────────────────────────────────────────────────────────────
   S.input_buf = api.nvim_create_buf(false, true)
@@ -962,7 +1015,7 @@ M.open = function(commands, opts)
   -- S.output_buf = api.nvim_create_buf(false, true)
 
   -- Initialize root page buffer using our caching system
-  switch_output_buf(title)
+  switch_output_buf(S.current_page_key)
 
   -- ── windows ─────────────────────────────────────────────────────────────────
   S.input_win = api.nvim_open_win(S.input_buf, true, {
@@ -973,7 +1026,7 @@ M.open = function(commands, opts)
     height = 1,
     border = "single",
     style = "minimal",
-    title = " " .. title .. " ",
+    title = " " .. S.current_page_key .. " ",
     title_pos = "center",
     zindex = 50,
   })
@@ -1030,6 +1083,10 @@ M.open = function(commands, opts)
   render_list()
   setup_keymaps()
   setup_autocmds()
+
+  update_output_title()
+  rehighlight_output(S.output_buf)
+
   if S.insert_mode then
     vim.cmd("startinsert")
   end

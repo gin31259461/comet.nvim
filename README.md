@@ -11,14 +11,19 @@ requires executing actions and displaying real-time output.
 
 - **🌗 Two-Panel Layout**: Left panel for fuzzy-searching and selecting items;
   right panel for viewing action output.
+- **🔄 Async Task Management**: Built-in support for tracking running jobs.
+  Displays live status in the output title (`[C-c: Stop]`, `[Done]`, `[Error]`)
+  and allows safely aborting tasks.
+- **State Persistence**: Output buffers, sub-menu depth, selections, and search
+  queries are cached and smoothly restored when reopening the UI.
 - **📂 Nested Sub-menus**: Push sub-selections onto the left panel to create
   step-by-step interactive flows.
 - **✅ Multi-select Support**: Built-in multi-select capabilities for sub-menus
   via `<Tab>`.
 - **✨ Output Highlighting**: Automatically highlights specific output patterns
-  (e.g., `Build succeeded`, `Error`, `✓`, `✗`) for visual feedback.
+  (e.g., `Build succeeded`, `Error`, `✓`, `✗`, `Abort`) for visual feedback.
 - **⌨️ Intuitive Navigation**: Navigate lists and toggle focus between the input
-  and output panels.
+  and output panels effortlessly.
 
 ## 💡 Use Case
 
@@ -66,11 +71,18 @@ local my_commands = {
     icon = "🧪",
     desc = "Run all unit tests",
     action = function(ctx)
-      ctx.clear()
-      ctx.write("$ jest --watchAll=false")
+      ctx:clear()
+      ctx:write("$ jest --watchAll=false")
+
+      -- Example of async task registration
+      ctx:start_async_task(12345, function(job_id, task_ctx)
+        task_ctx:append("\n[Process Terminated by User]")
+      end)
+
       vim.defer_fn(function()
-        ctx.append("✓ Test suite passed!")
-      end, 500)
+        ctx:append("✓ Test suite passed!")
+        ctx:done() -- Update UI status to [Done]
+      end, 1500)
     end,
   },
   {
@@ -79,14 +91,19 @@ local my_commands = {
     icon_hl = "WarningMsg",
     desc = "Compile the source code",
     action = function(ctx)
-      ctx.clear()
-      ctx.append("Build FAILED")
+      ctx:clear()
+      ctx:append("Build FAILED")
+      ctx:error()
     end,
   }
 }
 
 vim.keymap.set("n", "<leader>c", function()
-  comet.open(my_commands, { title = "My Tasks", insert_mode = true })
+  comet.open(my_commands, {
+    title = "My Tasks",
+    insert_mode = true,
+    remember_page = true
+  })
 end, { desc = "Open Comet UI" })
 ```
 
@@ -103,6 +120,12 @@ Opens the UI with a given set of commands.
   - `title` _(string)_: Title for the left panel.
   - `insert_mode` _(boolean)_: If `true`, automatically enters insert mode in
     the search prompt.
+  - `block_while_running` _(boolean)_: If `true`, prevents executing new
+    commands in the current page until the running job finishes. Defaults to
+    `true`.
+  - `remember_page` _(boolean)_: If `true`, remembers the last active sub-page,
+    selection, and query for each root command when reopening. Defaults to
+    `true`.
 
 ### Command Spec
 
@@ -114,23 +137,26 @@ Each item in the `commands` list must follow this structure:
   icon = "String",        -- Icon to display next to the name
   icon_hl = "String",     -- (Optional) Highlight group for the icon. Defaults to "String".
   desc = "String",        -- (Optional) Hidden description used for fuzzy filtering.
-  action = function(ctx)  -- Callback executed when the item is selected.
-  end
+  action = function(ctx) end  -- Callback executed when the item is selected.
 }
 ```
 
 ### The `ctx` Object
 
-When an `action` is triggered, it receives a `ctx` (context) object:
+When an `action` is triggered, it receives a `ctx` (context) object, which is
+strictly bound to the target buffer and page key:
 
-| Method                    | Description                                                     |
-| :------------------------ | :-------------------------------------------------------------- |
-| `ctx.write(lines)`        | Appends a string or array of strings to the output panel.       |
-| `ctx.append(line)`        | Appends a single line to the output panel.                      |
-| `ctx.clear()`             | Clears the output panel.                                        |
-| `ctx.select(items, opts)` | Replaces the left panel with a new list of items (Nested Menu). |
+| Method                                   | Description                                                             |
+| :--------------------------------------- | :---------------------------------------------------------------------- |
+| `ctx:write(lines)`                       | Appends a string or array of strings to the output panel.               |
+| `ctx:append(line)`                       | Appends a single line to the output panel.                              |
+| `ctx:clear()`                            | Clears the output panel.                                                |
+| `ctx:start_async_task(job_id, abort_fn)` | Registers a running task. `abort_fn(job_id, ctx)` is called on `<C-c>`. |
+| `ctx:done()`                             | Marks the registered task as successfully finished (`[Done]` in UI).    |
+| `ctx:error()`                            | Marks the registered task as failed (`[Error]` in UI).                  |
+| `ctx:select(items, opts)`                | Replaces the left panel with a new list of items (Nested Menu).         |
 
-#### Sub-selections (`ctx.select`)
+#### Sub-selections (`ctx:select`)
 
 Creates nested menus.
 
@@ -142,45 +168,27 @@ Creates nested menus.
     Receives `(item_or_items, ctx)`.
   - `on_cancel` _(function)_: (Optional) Callback if the user presses `<Esc>`.
 
-**Example:**
-
-```lua
-action = function(ctx)
-  local files = { "main.lua", "utils.lua", "config.lua" }
-
-  ctx.select(files, {
-    title = "Select Files to Lint",
-    multi_select = true,
-    on_select = function(selected_files, sub_ctx)
-      sub_ctx.clear()
-      sub_ctx.write("Linting selected files...")
-      for _, file in ipairs(selected_files) do
-         sub_ctx.append("✓ " .. file .. " looks good!")
-      end
-    end
-  })
-end
-```
-
 ---
 
 ## ⌨️ Keymaps
 
 ### Input / List Panels
 
-| Key               |      Mode       | Action                                |
-| :---------------- | :-------------: | :------------------------------------ |
-| `<C-j>` / `<C-k>` | Normal / Insert | Move selection down/up                |
-| `<Down>` / `<Up>` | Normal / Insert | Move selection down/up                |
-| `j` / `k`         |     Normal      | Move selection down/up                |
-| `<CR>`            | Normal / Insert | Execute selected item                 |
-| `<Tab>`           | Normal / Insert | Toggle multi-select mark (if enabled) |
-| `<C-l>`           | Normal / Insert | Focus the right output panel          |
-| `<Esc>` / `q`     | Normal / Insert | Go back (pop sub-menu) or Close UI    |
+| Key               |      Mode       | Action                                  |
+| :---------------- | :-------------: | :-------------------------------------- |
+| `<C-j>` / `<C-k>` | Normal / Insert | Move selection down/up                  |
+| `<Down>` / `<Up>` | Normal / Insert | Move selection down/up                  |
+| `j` / `k`         |     Normal      | Move selection down/up                  |
+| `<CR>`            | Normal / Insert | Execute selected item                   |
+| `<Tab>`           | Normal / Insert | Toggle multi-select mark (if enabled)   |
+| `<C-l>`           | Normal / Insert | Focus the right output panel            |
+| `<C-c>`           | Normal / Insert | Stop / Abort the currently running task |
+| `<Esc>` / `q`     | Normal / Insert | Go back (pop sub-menu) or Close UI      |
 
 ### Output Panel
 
 | Key           |  Mode  | Action                                             |
 | :------------ | :----: | :------------------------------------------------- |
 | `<C-h>`       | Normal | Return focus to the left panel                     |
+| `<C-c>`       | Normal | Stop / Abort the currently running task            |
 | `<Esc>` / `q` | Normal | Return focus to the left panel (does not close UI) |

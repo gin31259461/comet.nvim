@@ -1,21 +1,26 @@
 # ☄️ comet.nvim
 
-A sleek, generic two-panel picker and task UI for Neovim.
+A sleek, robust, and generic two-panel picker and task UI for Neovim.
 
 **comet.nvim** provides an elegant interface featuring a searchable list on the
-left and an output/preview panel on the right. It is designed for building
-custom menus, task runners, build system integrations, or any workflow that
-requires executing actions and displaying real-time output.
+left and an output/preview panel on the right. Under the hood, it is powered by
+a strictly decoupled, state-safe architecture that guarantees **100% background
+async execution** without zombie windows.
+
+It is designed for building custom menus, task runners, build system
+integrations, or any workflow that requires executing actions and displaying
+real-time output.
 
 ## ✨ Features
 
 - **🌗 Two-Panel Layout**: Left panel for fuzzy-searching and selecting items;
   right panel for viewing action output.
 - **🔄 Async Task Management**: Built-in support for tracking running jobs.
-  Displays live status in the output title (`[C-c: Stop]`, `[Done]`, `[Error]`)
-  and allows safely aborting tasks.
+  Close the UI while a task runs, and it will safely continue writing to the
+  buffer in the background. Open it again to seamlessly resume where you left
+  off.
 - **State Persistence**: Output buffers, sub-menu depth, selections, and search
-  queries are cached and smoothly restored when reopening the UI.
+  queries are securely cached and smoothly restored when reopening the UI.
 - **📂 Nested Sub-menus**: Push sub-selections onto the left panel to create
   step-by-step interactive flows.
 - **✅ Multi-select Support**: Built-in multi-select capabilities for sub-menus
@@ -31,10 +36,9 @@ For a practical implementation of **comet.nvim**, refer to
 [**dotnet-cli.nvim**](https://github.com/gin31259461/dotnet-cli.nvim).
 
 `dotnet-cli.nvim` is a .NET development plugin that utilizes `comet.nvim` as its
-core UI engine to manage .NET CLI commands and display their output.
-
-The `dotnet-cli.nvim` source code serves as a reference for structuring complex,
-nested commands and utilizing the `ctx` API.
+core UI engine to manage .NET CLI commands and display their output. The source
+code serves as a reference for structuring complex, nested commands and
+utilizing the context API.
 
 ---
 
@@ -60,7 +64,8 @@ use { 'Orbit-Lua/comet.nvim' }
 
 ## 🚀 Quick Start
 
-Basic example of configuring and opening the Comet UI:
+Basic example of configuring and opening the Comet UI. The API is entirely
+downward compatible.
 
 ```lua
 local comet = require("comet")
@@ -143,8 +148,9 @@ Each item in the `commands` list must follow this structure:
 
 ### The `ctx` Object
 
-When an `action` is triggered, it receives a `ctx` (context) object, which is
-strictly bound to the target buffer and page key:
+When an `action` is triggered, it receives a `ctx` (context) object. This object
+is securely bound to the target buffer and page key, ensuring safe background
+writes even if the UI is closed.
 
 | Method                                   | Description                                                             |
 | :--------------------------------------- | :---------------------------------------------------------------------- |

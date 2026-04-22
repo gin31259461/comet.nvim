@@ -25,6 +25,9 @@ local output_buf_cache = {}
 -- Tracks abort functions by page_key: { [page_key] = function() end }
 local running_tasks = {}
 
+---@type table<string, "running"|"done"|"abort"|nil>
+local task_status = {} -- Track current status of each page_key
+
 -- ── active UI state ───────────────────────────────────────────────────────────
 
 local S = {}
@@ -74,6 +77,39 @@ local function highlight_output(start_line, end_line)
   end
 end
 
+-- ── window helper ───────────────────────────────────────────────────
+
+local function update_output_title()
+  if not (S.output_win and api.nvim_win_is_valid(S.output_win)) then
+    return
+  end
+
+  local title = ""
+
+  if #S.sub_stack == 0 then
+    title = " Output "
+  else
+    title = " Output " .. S.current_page_key .. " "
+    local status = task_status[S.current_page_key]
+    local is_focused = api.nvim_get_current_win() == S.output_win
+
+    if status == "running" then
+      title = title .. "[C-c: Stop]"
+    elseif status == "done" then
+      title = title .. "[Done]"
+    elseif status == "abort" then
+      title = title .. "[Abort]"
+    end
+
+    title = title .. (is_focused and " (focused) " or " ")
+  end
+
+  pcall(api.nvim_win_set_config, S.output_win, {
+    title = title,
+    title_pos = "center",
+  })
+end
+
 -- ── focus helpers ─────────────────────────────────────────────────────────────
 
 local function focus_output()
@@ -83,19 +119,12 @@ local function focus_output()
   vim.cmd("stopinsert")
   api.nvim_set_current_win(S.output_win)
   vim.wo[S.output_win].cursorline = true
-  pcall(api.nvim_win_set_config, S.output_win, {
-    title = " Output (focused) ",
-    title_pos = "center",
-  })
+  update_output_title()
 end
 
 local function unfocus_output()
   if S.output_win and api.nvim_win_is_valid(S.output_win) then
     vim.wo[S.output_win].cursorline = false
-    pcall(api.nvim_win_set_config, S.output_win, {
-      title = " Output ",
-      title_pos = "center",
-    })
   end
   if S.input_win and api.nvim_win_is_valid(S.input_win) then
     api.nvim_set_current_win(S.input_win)
@@ -103,27 +132,10 @@ local function unfocus_output()
       vim.cmd("startinsert")
     end
   end
+  update_output_title()
 end
 
--- ── window & keymap helpers ───────────────────────────────────────────────────
-
-local function update_output_title()
-  if not (S.output_win and api.nvim_win_is_valid(S.output_win)) then
-    return
-  end
-  local is_focused = api.nvim_get_current_win() == S.output_win
-  local title = is_focused and " Output (focused) " or " Output "
-
-  -- Show UI indicator if there is an active job for the current page
-  if running_tasks[S.current_page_key] then
-    title = title .. "[C-c: Stop] "
-  end
-
-  pcall(api.nvim_win_set_config, S.output_win, {
-    title = title,
-    title_pos = "center",
-  })
-end
+-- ── keymap helpers ───────────────────────────────────────────────────
 
 local function apply_output_keymaps(buf)
   local function km(mode, lhs, fn)
@@ -422,6 +434,7 @@ end
 -- ── ctx factory ───────────────────────────────────────────────────────────────
 
 ---@param trigger_name string
+---@return CometCtx
 local function make_ctx(trigger_name)
   return {
     write = out_write,
@@ -431,16 +444,16 @@ local function make_ctx(trigger_name)
       out_write(line)
     end,
 
-    ---Register a function to be called when user presses <C-c>. Pass nil to clear.
+    ---Register a function to be called when user presses send stop signal. Pass nil to clear.
     set_abort = function(abort_fn)
-      local pk = S.current_page_key
-      running_tasks[pk] = abort_fn
+      running_tasks[S.current_page_key] = abort_fn
+      task_status[S.current_page_key] = abort_fn and "running" or nil
       vim.schedule(update_output_title)
     end,
 
     done = function()
-      local pk = S.current_page_key
-      running_tasks[pk] = nil
+      running_tasks[S.current_page_key] = nil
+      task_status[S.current_page_key] = "done"
       vim.schedule(update_output_title)
     end,
 
@@ -698,8 +711,13 @@ local function setup_keymaps()
   -- Stop job from input/list panels
   local function stop_job()
     local abort = running_tasks[S.current_page_key]
+
     if abort then
       abort()
+
+      running_tasks[S.current_page_key] = nil
+      task_status[S.current_page_key] = nil
+      update_output_title()
     end
   end
 
@@ -841,7 +859,7 @@ end
 ---@field clear fun()
 ---@field done fun()
 ---@field append fun(line: string)
----@field set_abort fun(abort_fn: function|nil) Register or clear a stop handler for <C-c>
+---@field set_abort fun(abort_fn: function|nil) Register or clear a stop handler for stop signal
 ---@field select fun(items: any[], opts: {title?: string, multi_select?: boolean, on_select: fun(item_or_items: any, ctx: CometCtx), on_cancel?: fun()})
 
 ---@class CometOpts

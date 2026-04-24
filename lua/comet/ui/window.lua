@@ -80,7 +80,7 @@ M.close = function()
   local S = state.get()
 
   if S.remember_page then
-    state.persisted_state = {
+    state.persisted_states[S.list_title] = {
       sub_stack = vim.deepcopy(S.sub_stack),
       selected = S.selected,
       filtered = vim.deepcopy(S.filtered),
@@ -88,8 +88,10 @@ M.close = function()
       current_page_key = S.current_page_key,
     }
   else
-    state.persisted_state = nil
+    state.persisted_states[S.list_title] = nil
   end
+
+  pcall(vim.api.nvim_clear_autocmds, { group = "CometUI" })
 
   for _, win in ipairs({ S.input_win, S.list_win, S.output_win }) do
     pcall(api.nvim_win_close, win, true)

@@ -10,33 +10,37 @@ local M = {}
 ---@param commands CometCommand[] Array of Command Specs
 ---@param opts? CometOpts User options
 M.open = function(commands, opts)
-  -- 1. Close cleanly if already open
-  if state.is_open() then
-    window.close()
-  end
-
-  -- 2. Resolve opts
   local resolved_opts = config.resolve(opts)
 
-  -- 3. Calculate Layout Mathematics
+  if state.is_open() then
+    local current_S = state.get()
+    local is_same_plugin = current_S.list_title == resolved_opts.title
+    window.close()
+
+    if is_same_plugin then
+      return
+    end
+  end
+
+  -- Calculate Layout Mathematics
   local total_w = math.floor(vim.o.columns * 0.86)
   local total_h = math.floor(vim.o.lines * 0.78)
   local list_h = total_h - 3
 
-  -- 4. Initialize Core State
+  -- Initialize Core State
   state.init(commands, resolved_opts, { list_h = list_h })
 
-  -- 5. Build Windows and Map Buffers
+  -- Build Windows and Map Buffers
   window.create_layout(total_w, total_h)
 
-  -- 6. Setup Listeners
+  -- Setup Listeners
   events.setup()
 
-  -- 7. Render UI
+  -- Render UI
   render.list()
   render.update_output_title()
 
-  -- 8. UX
+  -- UX
   if resolved_opts.insert_mode then
     vim.cmd("startinsert")
   end

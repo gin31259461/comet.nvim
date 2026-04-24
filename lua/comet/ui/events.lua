@@ -129,8 +129,14 @@ M.setup = function()
     group = aug,
     callback = function(ev)
       local closed = tonumber(ev.match)
-      if S.input_win and (closed == S.input_win or closed == S.list_win or closed == S.output_win) then
-        vim.schedule(window.close)
+      -- Always check the latest state dynamically to avoid stale closure issues
+      if state.is_open() then
+        local cur_S = state.get()
+        if
+          cur_S.input_win and (closed == cur_S.input_win or closed == cur_S.list_win or closed == cur_S.output_win)
+        then
+          vim.schedule(window.close)
+        end
       end
     end,
   })

@@ -67,7 +67,7 @@ M.running_tasks = {}
 
 --- Store the UI state across closing and reopening
 ---@type table|nil
-M.persisted_state = nil
+M.persisted_states = {}
 
 -- ── Active UI State ───────────────────────────────────────────────────────────
 
@@ -126,12 +126,13 @@ M.init = function(commands, opts, layout_opts)
     end,
   }
 
-  if S.remember_page and M.persisted_state then
-    S.sub_stack = vim.deepcopy(M.persisted_state.sub_stack)
-    S.selected = M.persisted_state.selected
-    S.filtered = vim.deepcopy(M.persisted_state.filtered)
-    S.last_query = M.persisted_state.last_query
-    S.current_page_key = M.persisted_state.current_page_key
+  local p_state = M.persisted_states[title]
+  if S.remember_page and p_state then
+    S.sub_stack = vim.deepcopy(p_state.sub_stack)
+    S.selected = p_state.selected
+    S.filtered = vim.deepcopy(p_state.filtered)
+    S.last_query = p_state.last_query
+    S.current_page_key = p_state.current_page_key
   end
 end
 

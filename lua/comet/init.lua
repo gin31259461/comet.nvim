@@ -6,6 +6,11 @@ local window = require("comet.ui.window")
 
 local M = {}
 
+---@param opts? CometOpts
+M.setup = function(opts)
+  config.setup(opts)
+end
+
 --- Open the two-panel picker UI.
 ---@param commands CometCommand[] Array of Command Specs
 ---@param opts? CometOpts User options

@@ -1,18 +1,28 @@
--- Options resolution
-
 local M = {}
 
---- Merge user options with defaults
+---@type CometOpts
+M.defaults = {
+  title = "Commands",
+  insert_mode = false,
+  block_while_running = true,
+  remember_page = true,
+}
+
+---@type CometOpts
+M.values = vim.deepcopy(M.defaults)
+
+--- Set global default options
+---@param opts? CometOpts
+M.setup = function(opts)
+  M.values = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
+end
+
+--- Merge incoming options with the global defaults
 ---@param opts? CometOpts
 ---@return CometOpts
 M.resolve = function(opts)
-  opts = opts or {}
-  return {
-    title = opts.title or "Commands",
-    insert_mode = not not opts.insert_mode,
-    block_while_running = opts.block_while_running ~= false,
-    remember_page = opts.remember_page ~= false,
-  }
+  -- If `open` is called with local opts, override the global `M.values`
+  return vim.tbl_deep_extend("force", vim.deepcopy(M.values), opts or {})
 end
 
 return M

@@ -19,7 +19,7 @@ M.open = function(commands, opts)
 
   if state.is_open() then
     local current_S = state.get()
-    local is_same_plugin = current_S.list_title == resolved_opts.title
+    local is_same_plugin = current_S.session_id == resolved_opts.session_id
     window.close()
 
     if is_same_plugin then

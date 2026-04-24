@@ -2,7 +2,8 @@ local M = {}
 
 ---@type CometOpts
 M.defaults = {
-  title = "Commands",
+  session_id = "Comet",
+  -- root_title is optional and will default to session_id if not provided
   insert_mode = false,
   block_while_running = true,
   remember_page = true,

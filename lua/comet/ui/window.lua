@@ -80,7 +80,7 @@ M.close = function()
   local S = state.get()
 
   if S.remember_page then
-    state.persisted_states[S.list_title] = {
+    state.persisted_states[S.session_id] = {
       sub_stack = vim.deepcopy(S.sub_stack),
       selected = S.selected,
       filtered = vim.deepcopy(S.filtered),
@@ -88,7 +88,7 @@ M.close = function()
       current_page_key = S.current_page_key,
     }
   else
-    state.persisted_states[S.list_title] = nil
+    state.persisted_states[S.session_id] = nil
   end
 
   pcall(vim.api.nvim_clear_autocmds, { group = "CometUI" })
@@ -122,6 +122,12 @@ M.create_layout = function(w_total, h_total)
   -- Mount the proper output buf based on state
   M.switch_output_buf(S.current_page_key)
 
+  -- FIX: correct title for the input window based on the current stack depth
+  local input_title = S.root_title
+  if #S.sub_stack > 0 then
+    input_title = S.sub_stack[#S.sub_stack].title
+  end
+
   S.input_win = api.nvim_open_win(S.input_buf, true, {
     relative = "editor",
     row = row_start,
@@ -130,7 +136,7 @@ M.create_layout = function(w_total, h_total)
     height = 1,
     border = "single",
     style = "minimal",
-    title = " " .. S.current_page_key .. " ",
+    title = " " .. input_title .. " ",
     title_pos = "center",
     zindex = 50,
   })

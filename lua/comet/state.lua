@@ -8,7 +8,8 @@
 ---@field action fun(ctx: CometCtx) Callback executed when selected
 
 ---@class CometOpts
----@field title? string Title for the left panel
+---@field session_id? string Title for the left panel
+---@field root_title? string Optional title for the root page (defaults to session_id)
 ---@field insert_mode? boolean Automatically enter insert mode
 ---@field block_while_running? boolean Prevent executing new commands while running
 ---@field remember_page? boolean Remember sub-page, selection, and query across sessions
@@ -38,7 +39,8 @@
 ---@field last_query string
 ---@field prompt string
 ---@field list_h integer
----@field list_title string
+---@field session_id string
+---@field root_title string
 ---@field insert_mode boolean
 ---@field block_while_running boolean
 ---@field remember_page boolean
@@ -100,9 +102,12 @@ end
 ---@param opts CometOpts
 ---@param layout_opts table Pre-calculated layout dimensions
 M.init = function(commands, opts, layout_opts)
-  local title = opts.title or "Commands"
+  local session_id = opts.session_id or "Comet"
+  local root_title = opts.root_title or session_id
 
   S = {
+    session_id = session_id,
+    root_title = root_title,
     commands = commands,
     filtered = vim.deepcopy(commands),
     selected = 1,
@@ -110,11 +115,10 @@ M.init = function(commands, opts, layout_opts)
     last_query = "",
     prompt = "  ",
     list_h = layout_opts.list_h,
-    list_title = title,
     insert_mode = opts.insert_mode or false,
     block_while_running = opts.block_while_running ~= false,
     remember_page = opts.remember_page ~= false,
-    current_page_key = title,
+    current_page_key = root_title,
     ns = vim.api.nvim_create_namespace("CometUI"),
     out_ns = vim.api.nvim_create_namespace("CometUIOutput"),
     default_abort_fn = function(job_id, ctx)
@@ -126,7 +130,7 @@ M.init = function(commands, opts, layout_opts)
     end,
   }
 
-  local p_state = M.persisted_states[title]
+  local p_state = M.persisted_states[S.session_id]
   if S.remember_page and p_state then
     S.sub_stack = vim.deepcopy(p_state.sub_stack)
     S.selected = p_state.selected

@@ -36,8 +36,8 @@ M.handle_esc = function()
       popped.on_cancel()
     end
 
-    local parent_title = S.list_title
-    local parent_key = S.list_title
+    local parent_title = S.root_title
+    local parent_key = S.root_title
 
     if #S.sub_stack > 0 then
       local parent = S.sub_stack[#S.sub_stack]
@@ -129,8 +129,8 @@ M.run_selected = function()
       local on_sel = sub.on_select
       local popped = table.remove(S.sub_stack)
 
-      local parent_title = S.list_title
-      local parent_key = S.list_title
+      local parent_title = S.root_title
+      local parent_key = S.root_title
       if #S.sub_stack > 0 then
         local parent = S.sub_stack[#S.sub_stack]
         parent_title = parent.title

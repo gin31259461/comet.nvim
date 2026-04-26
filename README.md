@@ -105,7 +105,7 @@ local my_commands = {
 
 vim.keymap.set("n", "<leader>c", function()
   comet.open(my_commands, {
-    title = "My Tasks",
+    session_id = "My Tasks",
     insert_mode = true,
     remember_page = true
   })
@@ -122,7 +122,8 @@ Opens the UI with a given set of commands.
 
 - `commands`: An array of **Command Spec** objects.
 - `opts`: Options table.
-  - `title` _(string)_: Title for the left panel.
+  - `session_id` _(string)_: Unique identifier for different plugin sessions
+  - `root_title` _(string)_: Title for the root left panel.
   - `insert_mode` _(boolean)_: If `true`, automatically enters insert mode in
     the search prompt.
   - `block_while_running` _(boolean)_: If `true`, prevents executing new

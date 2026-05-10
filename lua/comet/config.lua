@@ -4,7 +4,7 @@ local M = {}
 M.defaults = {
   session_id = "Comet",
   -- root_title is optional and will default to session_id if not provided
-  insert_mode = false,
+  insert_mode = true,
   block_while_running = true,
   remember_page = true,
 }

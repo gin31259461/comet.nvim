@@ -1,71 +1,44 @@
-# ☄️ comet.nvim
+# comet.nvim
 
-A sleek, robust, and generic two-panel picker and task UI for Neovim.
+A generic two-panel picker and task UI for Neovim.
 
-**comet.nvim** provides an elegant interface featuring a searchable list on the
-left and an output/preview panel on the right. Under the hood, it is powered by
-a strictly decoupled, state-safe architecture that guarantees **100% background
-async execution** without zombie windows.
+comet.nvim provides a floating layout with a searchable list on the left and an output/preview panel on the right. It is built around a strictly decoupled, state-safe architecture that guarantees 100% background async execution without zombie windows.
 
-It is designed for building custom menus, task runners, build system
-integrations, or any workflow that requires executing actions and displaying
-real-time output.
+Designed for building custom menus, task runners, build system integrations, or any workflow that requires executing actions and displaying real-time output.
 
-## ✨ Features
+## Features
 
-- **🌗 Two-Panel Layout**: Left panel for fuzzy-searching and selecting items;
-  right panel for viewing action output.
-- **🔄 Async Task Management**: Built-in support for tracking running jobs.
-  Close the UI while a task runs, and it will safely continue writing to the
-  buffer in the background. Open it again to seamlessly resume where you left
-  off.
-- **State Persistence**: Output buffers, sub-menu depth, selections, and search
-  queries are securely cached and smoothly restored when reopening the UI.
-- **📂 Nested Sub-menus**: Push sub-selections onto the left panel to create
-  step-by-step interactive flows.
-- **✅ Multi-select Support**: Built-in multi-select capabilities for sub-menus
-  via `<Tab>`.
-- **✨ Output Highlighting**: Automatically highlights specific output patterns
-  (e.g., `Build succeeded`, `Error`, `✓`, `✗`, `Abort`) for visual feedback.
-- **⌨️ Intuitive Navigation**: Navigate lists and toggle focus between the input
-  and output panels effortlessly.
+- **Two-panel layout** — left panel for fuzzy-searching and selecting items; right panel for viewing action output.
+- **Async task management** — close the UI while a task runs; it continues writing to the buffer in the background. Reopen to resume seamlessly.
+- **State persistence** — output buffers, sub-menu depth, selections, and search queries are cached and restored on reopen.
+- **Nested sub-menus** — push sub-selections onto the left panel to build step-by-step interactive flows.
+- **Multi-select** — toggle multiple items with `<Tab>` in sub-menus.
+- **Output highlighting** — automatically highlights patterns like `Build succeeded`, `Error`, `✓`, `✗`, `Abort`.
+- **Intuitive navigation** — toggle focus between input and output panels with `<C-l>` / `<C-h>`.
 
-## 💡 Use Case
+## Reference implementation
 
-For a practical implementation of **comet.nvim**, refer to
-[**dotnet-cli.nvim**](https://github.com/gin31259461/dotnet-cli.nvim).
-
-`dotnet-cli.nvim` is a .NET development plugin that utilizes `comet.nvim` as its
-core UI engine to manage .NET CLI commands and display their output. The source
-code serves as a reference for structuring complex, nested commands and
-utilizing the context API.
+[dotnet-cli.nvim](https://github.com/gin31259461/dotnet-cli.nvim) uses comet.nvim as its core UI engine. Its source is a good reference for structuring complex nested commands and using the context API.
 
 ---
 
-## 📦 Installation
+## Installation
 
-Install `comet.nvim` using your preferred package manager.
-
-**[lazy.nvim](https://github.com/folke/lazy.nvim):**
+**lazy.nvim:**
 
 ```lua
-{
-  "Orbit-Lua/comet.nvim",
-}
+{ "Orbit-Lua/comet.nvim" }
 ```
 
-**[packer.nvim](https://github.com/wbthomason/packer.nvim):**
+**packer.nvim:**
 
 ```lua
-use { 'Orbit-Lua/comet.nvim' }
+use { "Orbit-Lua/comet.nvim" }
 ```
 
 ---
 
-## 🚀 Quick Start
-
-Basic example of configuring and opening the Comet UI. The API is entirely
-downward compatible.
+## Quick Start
 
 ```lua
 local comet = require("comet")
@@ -73,26 +46,25 @@ local comet = require("comet")
 local my_commands = {
   {
     name = "Run Tests",
-    icon = "🧪",
+    icon = "",
     desc = "Run all unit tests",
     action = function(ctx)
       ctx:clear()
       ctx:write("$ jest --watchAll=false")
 
-      -- Example of async task registration
       ctx:start_async_task(12345, function(job_id, task_ctx)
         task_ctx:append("\n[Process Terminated by User]")
       end)
 
       vim.defer_fn(function()
         ctx:append("✓ Test suite passed!")
-        ctx:done() -- Update UI status to [Done]
+        ctx:done()
       end, 1500)
     end,
   },
   {
     name = "Build Project",
-    icon = "🔨",
+    icon = "",
     icon_hl = "WarningMsg",
     desc = "Compile the source code",
     action = function(ctx)
@@ -100,102 +72,103 @@ local my_commands = {
       ctx:append("Build FAILED")
       ctx:error()
     end,
-  }
+  },
 }
 
 vim.keymap.set("n", "<leader>c", function()
   comet.open(my_commands, {
     session_id = "My Tasks",
     insert_mode = true,
-    remember_page = true
+    remember_page = true,
   })
 end, { desc = "Open Comet UI" })
 ```
 
 ---
 
-## API & Configuration
+## API
+
+### `require("comet").setup(opts)`
+
+Set global default options. Optional — call only if you want to change defaults across all `open()` calls.
 
 ### `require("comet").open(commands, opts)`
 
 Opens the UI with a given set of commands.
 
-- `commands`: An array of **Command Spec** objects.
-- `opts`: Options table.
-  - `session_id` _(string)_: Unique identifier for different plugin sessions
-  - `root_title` _(string)_: Title for the root left panel.
-  - `insert_mode` _(boolean)_: If `true`, automatically enters insert mode in
-    the search prompt.
-  - `block_while_running` _(boolean)_: If `true`, prevents executing new
-    commands in the current page until the running job finishes. Defaults to
-    `true`.
-  - `remember_page` _(boolean)_: If `true`, remembers the last active sub-page,
-    selection, and query for each root command when reopening. Defaults to
-    `true`.
+- `commands` — array of Command Spec objects (see below).
+- `opts` — options table (merged with global defaults).
+
+**Options:**
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `session_id` | string | `"Comet"` | Unique identifier for this plugin session. |
+| `root_title` | string | `session_id` | Title for the root left panel. |
+| `insert_mode` | boolean | `true` | Enter insert mode in the search prompt on open. |
+| `block_while_running` | boolean | `true` | Prevent executing new commands while a job is running. |
+| `remember_page` | boolean | `true` | Restore sub-page, selection, and query on reopen. |
 
 ### Command Spec
 
-Each item in the `commands` list must follow this structure:
-
 ```lua
 {
-  name = "String",        -- Display name of the item
-  icon = "String",        -- Icon to display next to the name
-  icon_hl = "String",     -- (Optional) Highlight group for the icon. Defaults to "String".
-  desc = "String",        -- (Optional) Hidden description used for fuzzy filtering.
-  action = function(ctx) end  -- Callback executed when the item is selected.
+  name    = "string",             -- display name
+  icon    = "string",             -- icon shown beside the name
+  icon_hl = "string",             -- (optional) highlight group for icon; defaults to "String"
+  desc    = "string",             -- (optional) extra text used for fuzzy filtering
+  action  = function(ctx) end,    -- callback executed when the item is selected
 }
 ```
 
-### The `ctx` Object
+### The `ctx` object
 
-When an `action` is triggered, it receives a `ctx` (context) object. This object
-is securely bound to the target buffer and page key, ensuring safe background
-writes even if the UI is closed.
+Each `action` receives a `ctx` bound to the current output buffer and page key. It is safe to use inside `vim.schedule`, job callbacks, and after the UI is closed.
 
-| Method                                   | Description                                                             |
-| :--------------------------------------- | :---------------------------------------------------------------------- |
-| `ctx:write(lines)`                       | Appends a string or array of strings to the output panel.               |
-| `ctx:append(line)`                       | Appends a single line to the output panel.                              |
-| `ctx:clear()`                            | Clears the output panel.                                                |
-| `ctx:start_async_task(job_id, abort_fn)` | Registers a running task. `abort_fn(job_id, ctx)` is called on `<C-c>`. |
-| `ctx:done()`                             | Marks the registered task as successfully finished (`[Done]` in UI).    |
-| `ctx:error()`                            | Marks the registered task as failed (`[Error]` in UI).                  |
-| `ctx:select(items, opts)`                | Replaces the left panel with a new list of items (Nested Menu).         |
+| Method | Description |
+|---|---|
+| `ctx:write(lines)` | Append a string or array of strings to the output panel. |
+| `ctx:append(line)` | Append a single line to the output panel. |
+| `ctx:clear()` | Clear the output panel. |
+| `ctx:start_async_task(job_id, abort_fn)` | Register a running task. `abort_fn(job_id, ctx)` is called on `<C-c>`. |
+| `ctx:done()` | Mark the task as finished — shows `[Done]` in the output title. |
+| `ctx:error()` | Mark the task as failed — shows `[Error]` in the output title. |
+| `ctx:select(items, opts)` | Replace the left panel with a new list (nested sub-menu). |
 
-#### Sub-selections (`ctx:select`)
+### Sub-menus (`ctx:select`)
 
-Creates nested menus.
+```lua
+ctx:select(items, {
+  title        = "string",    -- title for the sub-menu panel
+  multi_select = true,        -- enable <Tab> multi-select
+  on_select    = function(item_or_items, ctx) end,
+  on_cancel    = function() end,  -- optional, called on <Esc>
+})
+```
 
-- `items`: Array of strings or Command Spec tables.
-- `opts`:
-  - `title` _(string)_: Title for the sub-menu.
-  - `multi_select` _(boolean)_: Enable selecting multiple items with `<Tab>`.
-  - `on_select` _(function)_: Callback when an item (or items) is chosen.
-    Receives `(item_or_items, ctx)`.
-  - `on_cancel` _(function)_: (Optional) Callback if the user presses `<Esc>`.
+`items` may be an array of strings or Command Spec tables.
 
 ---
 
-## ⌨️ Keymaps
+## Keymaps
 
-### Input / List Panels
+### Input / List panels
 
-| Key               |      Mode       | Action                                  |
-| :---------------- | :-------------: | :-------------------------------------- |
-| `<C-j>` / `<C-k>` | Normal / Insert | Move selection down/up                  |
-| `<Down>` / `<Up>` | Normal / Insert | Move selection down/up                  |
-| `j` / `k`         |     Normal      | Move selection down/up                  |
-| `<CR>`            | Normal / Insert | Execute selected item                   |
-| `<Tab>`           | Normal / Insert | Toggle multi-select mark (if enabled)   |
-| `<C-l>`           | Normal / Insert | Focus the right output panel            |
-| `<C-c>`           | Normal / Insert | Stop / Abort the currently running task |
-| `<Esc>` / `q`     | Normal / Insert | Go back (pop sub-menu) or Close UI      |
+| Key | Mode | Action |
+|---|---|---|
+| `<C-j>` / `<C-k>` | Normal / Insert | Move selection down / up |
+| `<Down>` / `<Up>` | Normal / Insert | Move selection down / up |
+| `j` / `k` | Normal | Move selection down / up |
+| `<CR>` | Normal / Insert | Execute selected item |
+| `<Tab>` | Normal / Insert | Toggle multi-select mark (if enabled) |
+| `<C-l>` | Normal / Insert | Focus the right output panel |
+| `<C-c>` | Normal / Insert | Stop / abort the running task |
+| `<Esc>` / `q` | Normal / Insert | Go back (pop sub-menu) or close UI |
 
-### Output Panel
+### Output panel
 
-| Key           |  Mode  | Action                                             |
-| :------------ | :----: | :------------------------------------------------- |
-| `<C-h>`       | Normal | Return focus to the left panel                     |
-| `<C-c>`       | Normal | Stop / Abort the currently running task            |
+| Key | Mode | Action |
+|---|---|---|
+| `<C-h>` | Normal | Return focus to the left panel |
+| `<C-c>` | Normal | Stop / abort the running task |
 | `<Esc>` / `q` | Normal | Return focus to the left panel (does not close UI) |

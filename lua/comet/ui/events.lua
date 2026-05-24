@@ -111,13 +111,7 @@ M.setup = function()
     buffer = S.input_buf,
     callback = function()
       local cursor = api.nvim_win_get_cursor(0)
-      local mode = api.nvim_get_mode().mode
-      local line_len = #api.nvim_get_current_line()
-
       local min_col = prompt_bytes
-      if mode:sub(1, 1) ~= "i" then
-        min_col = math.min(prompt_bytes, math.max(0, line_len - 1))
-      end
 
       if cursor[2] < min_col then
         pcall(api.nvim_win_set_cursor, 0, { cursor[1], min_col })

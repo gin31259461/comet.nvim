@@ -177,6 +177,7 @@ M.create_layout = function(w_total, h_total)
     vim.wo[win].signcolumn = "no"
     vim.wo[win].cursorline = false
   end
+  vim.wo[S.input_win].virtualedit = "all"
   vim.wo[S.output_win].wrap = true
 
   vim.bo[S.list_buf].buftype = "nofile"

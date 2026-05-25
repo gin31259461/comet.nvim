@@ -73,20 +73,22 @@ M.update_output_title = function()
 
   local title = " Output "
   if #S.sub_stack > 0 then
-    title = title .. S.current_page_key .. " "
+    title = title .. S.current_page_key
+  else
+    title = title .. "Main"
   end
 
   local status = state.running_tasks[S.current_page_key] and state.running_tasks[S.current_page_key].status or nil
   local is_focused = api.nvim_get_current_win() == S.output_win
 
   if status == "running" then
-    title = title .. "[C-c: Stop]"
+    title = title .. " [C-c: Stop]"
   elseif status == "done" then
-    title = title .. "[Done]"
+    title = title .. " [Done]"
   elseif status == "abort" then
-    title = title .. "[Abort]"
+    title = title .. " [Abort]"
   elseif status == "error" then
-    title = title .. "[Error]"
+    title = title .. " [Error]"
   end
 
   title = title .. (is_focused and "(focused) " or " ")
